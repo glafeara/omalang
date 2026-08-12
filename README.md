@@ -5,6 +5,8 @@ Switch, add and remove keyboard layouts from the
 on-screen indicator flashing the new layout after every switch, including
 switches made with the Hyprland keybinding (`SUPER+SPACE`).
 
+![The Omalang panel](preview.png)
+
 The bar shows the active layout's abbreviation (`US`, `RU`, …). The panel
 lists your layouts with their full names; a search box over the complete
 xkb layout catalog adds a new one. The layout list is not the widget's own
