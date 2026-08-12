@@ -355,14 +355,29 @@ Panel {
               Text {
                 anchors.left: rowAbbrev.right
                 anchors.leftMargin: Style.space(10)
-                anchors.right: removeButton.visible ? removeButton.left : parent.right
+                anchors.right: removeButton.visible ? removeButton.left
+                  : (activeCheck.visible ? activeCheck.left : parent.right)
                 anchors.rightMargin: Style.space(8)
                 anchors.verticalCenter: parent.verticalCenter
-                text: root.nameFor(row.modelData) + (row.isActive ? "  ✓" : "")
+                text: root.nameFor(row.modelData)
                 color: row.isActive ? root.foreground : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
                 elide: Text.ElideRight
+              }
+
+              // One check, at the row's right edge; the hover-only remove
+              // button takes that slot when it shows, so they never stack.
+              Text {
+                id: activeCheck
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(10)
+                anchors.verticalCenter: parent.verticalCenter
+                visible: row.isActive && !removeButton.visible
+                text: "✓"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
               }
 
               PanelActionButton {
