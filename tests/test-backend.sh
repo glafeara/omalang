@@ -18,6 +18,8 @@ fresh() { # [conf|lua]
   export LANGUAGES_INPUT_CONF="$FAKE_DIR/input.conf"
   export LANGUAGES_INPUT_LUA="$FAKE_DIR/input.lua"
   export LANGUAGES_XKB_RULES="$FAKE_DIR/base.lst"
+  # The compositor fallback only speaks when a test sets it explicitly.
+  unset FAKE_OPT_KB_LAYOUT FAKE_OPT_KB_VARIANT FAKE_FAIL_RELOAD
   # input.lua only exists on lua installs — its presence is the dialect switch.
   # The lua fixture mirrors the real file: kb_layout on its own line inside a
   # multi-line hl.config block, which is what the backend's line-anchored
@@ -78,6 +80,22 @@ printf 'input {\n  kb_layout = us,ru\n  kb_variant = ,phonetic\n}\n' > "$LANGUAG
 out="$(bash "$backend" variants)"
 expect "conf: variants reads kb_variant" '[ "$out" = ",phonetic" ]'
 
+fresh conf
+printf 'input {\n  kb_layout = us,ru # us at work\n}\n' > "$LANGUAGES_INPUT_CONF"
+out="$(bash "$backend" current)"
+expect "conf: an inline # comment is not part of the list" '[ "$out" = "us,ru" ]'
+
+fresh lua
+printf 'hl.config({\n  input = {\n    kb_layout = "us,ru", -- keep "us" first\n  },\n})\n' > "$LANGUAGES_INPUT_LUA"
+out="$(bash "$backend" current)"
+expect "lua: a trailing comment with quotes does not hijack the value" '[ "$out" = "us,ru" ]'
+
+fresh conf
+: > "$LANGUAGES_INPUT_CONF"
+export FAKE_OPT_KB_LAYOUT="us,ru"
+out="$(bash "$backend" current)"
+expect "current falls back to the compositor when the file has no live line" '[ "$out" = "us,ru" ]'
+
 # --- add -------------------------------------------------------------------
 
 fresh conf
@@ -114,8 +132,45 @@ expect "lua: add edits the quoted assignment in place" \
 fresh lua
 echo '-- no live assignment here' > "$LANGUAGES_INPUT_LUA"
 bash "$backend" add de; rc=$?
-expect "lua: add with no live assignment appends an hl.config call" \
-  '[ "$rc" = 0 ] && grep -qF "hl.config({ input = { kb_layout = \"de\" } })" "$LANGUAGES_INPUT_LUA"'
+expect "lua: add with no live assignment appends a readable multi-line block" \
+  '[ "$rc" = 0 ] && grep -qE "^    kb_layout = \"de\",$" "$LANGUAGES_INPUT_LUA" && [ "$(bash "$backend" current)" = "de" ]'
+
+# The stock-Omarchy first run: input.lua exists but every kb_layout line is
+# commented, the effective list lives in the compositor. The first add must
+# extend that list — not replace it — and the appended block must be
+# editable by the second and third mutation.
+fresh lua
+printf -- '--     kb_layout = "us,dk,eu",\n' > "$LANGUAGES_INPUT_LUA"
+export FAKE_OPT_KB_LAYOUT="us,ru"
+bash "$backend" add de; rc=$?
+expect "stock lua: first add extends the compositor list, not replaces it" \
+  '[ "$rc" = 0 ] && grep -qE "^    kb_layout = \"us,ru,de\",$" "$LANGUAGES_INPUT_LUA"'
+
+fresh lua
+printf -- '--     kb_layout = "us,dk,eu",\n' > "$LANGUAGES_INPUT_LUA"
+export FAKE_OPT_KB_LAYOUT="us,ru"
+bash "$backend" add de && bash "$backend" add fr && bash "$backend" remove 0; rc=$?
+expect "stock lua: the appended block stays editable by later mutations" \
+  '[ "$rc" = 0 ] && grep -qE "^    kb_layout = \"ru,de,fr\",$" "$LANGUAGES_INPUT_LUA" && [ "$(grep -cE "^[[:space:]]*kb_layout = \"" "$LANGUAGES_INPUT_LUA")" = 1 ]'
+
+fresh lua
+printf -- '--     kb_layout = "us,dk,eu",\n' > "$LANGUAGES_INPUT_LUA"
+export FAKE_OPT_KB_LAYOUT="ru,us"
+export FAKE_OPT_KB_VARIANT="phonetic"
+bash "$backend" add de; rc=$?
+expect "stock lua: compositor variants are carried into the first write" \
+  '[ "$rc" = 0 ] && grep -qE "^    kb_layout = \"ru,us,de\",$" "$LANGUAGES_INPUT_LUA" && grep -qE "^    kb_variant = \"phonetic,,\",$" "$LANGUAGES_INPUT_LUA"'
+
+fresh conf
+printf 'input {\n  kb_layout = us,r|u\n}\n' > "$LANGUAGES_INPUT_CONF"
+bash "$backend" add de >/dev/null 2>&1; rc=$?
+expect "an unparseable kb_layout entry refuses every mutation, file untouched" \
+  '[ "$rc" != 0 ] && grep -qF "kb_layout = us,r|u" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 0 ]'
+
+fresh conf
+export FAKE_FAIL_RELOAD=1
+bash "$backend" add de >/dev/null 2>&1; rc=$?
+expect "a failed hyprctl reload is not reported as success" '[ "$rc" != 0 ]'
 
 # --- add with variants -----------------------------------------------------
 
@@ -131,7 +186,7 @@ expect "conf: duplicate code+variant pair is a no-op" \
 
 fresh conf
 bash "$backend" add us dvorak && bash "$backend" add us; rc=$?
-expect "conf: same code with and without variant are distinct entries" \
+expect "conf: us(dvorak) is added despite bare us; a second bare us stays a no-op" \
   '[ "$rc" = 0 ] && grep -qE "^  kb_layout = us,ru,us$" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 1 ]'
 
 fresh lua

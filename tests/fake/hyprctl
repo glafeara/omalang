@@ -1,5 +1,21 @@
 #!/bin/bash
 # Fake hyprctl: records every invocation so tests can assert that a write
-# was followed by exactly one reload, and that a no-op wasn't.
+# was followed by exactly one reload, and that a no-op wasn't. getoption
+# answers from FAKE_OPT_* so suites can model a compositor whose state the
+# user file does not carry (stock Omarchy keeps kb_layout commented out).
+# FAKE_FAIL_RELOAD makes reload fail, pinning that a failed reload is not
+# reported as success.
 echo "$@" >> "${FAKE_LOG:?FAKE_LOG not set}"
+if [[ ${1:-} == getoption ]]; then
+  case "${2:-}" in
+    input:kb_layout)  echo "str: ${FAKE_OPT_KB_LAYOUT:-}" ;;
+    input:kb_variant) echo "str: ${FAKE_OPT_KB_VARIANT:-}" ;;
+  esac
+  echo "set: true"
+  exit 0
+fi
+if [[ ${1:-} == reload && -n ${FAKE_FAIL_RELOAD:-} ]]; then
+  echo "reload failed" >&2
+  exit 1
+fi
 exit 0

@@ -24,7 +24,7 @@ Everything is stock Omarchy — the widget adds no dependencies:
   event socket.
 - **xkeyboard-config** — the layout catalog behind "Add language…" is
   parsed from the system's xkb rules list
-  (`/usr/share/X11/xkb/rules/base.lst`).
+  (`/usr/share/X11/xkb/rules/base.lst`, falling back to `evdev.lst`).
 
 No sudo, no daemons: the config edited is your own file in `~/.config`.
 
@@ -67,13 +67,15 @@ their own, so the same code can appear twice with different variants.
 **The indicator:** after every layout switch — from the panel, the bar's
 right click, or the Hyprland keybinding — the new layout's abbreviation
 flashes in the middle of the focused monitor: where you are typing, not
-where the bar happens to live. It is drawn in the same card style as the
-stock Omarchy OSDs and is visual only: its input region is empty, so it
-never steals a click or a keystroke from what you are typing. Device
-replays are filtered out — Hyprland re-announces the layout when a device
-(re)appears, a connecting bluetooth headset included, and that is not a
-switch worth flashing. On input-method setups (fcitx5) the virtual
-keyboard's stale state is ignored too.
+where the bar happens to live. It is drawn in the shell's popup card
+style and is visual only: its input region is empty, so it never steals a
+click or a keystroke from what you are typing. It flashes once per
+switch: Hyprland announces a switch once per keyboard and replays it when
+a device (re)appears — a connecting bluetooth headset included — and
+neither the replays nor the extra per-device announcements flash again.
+Virtual keyboards (fcitx5, ydotool) are ignored outright, and on a
+multi-monitor setup a single widget instance owns the flash, so two bars
+never stack two cards.
 
 **Switching is compositor-wide** (`switchxkblayout all`), the same thing
 the stock Omarchy keybinding does, so the widget and the keybinding never
@@ -83,7 +85,7 @@ fight over which device's layout counts.
 
 | Key | Default | Range |
 | --- | --- | --- |
-| `osdDurationMs` | `750` | 200–5000 |
+| `osdDurationMs` | `750` | 200–5000, clamped by the widget itself |
 | `showOsd` | `true` | `false` disables the centered indicator |
 
 ```bash
@@ -114,8 +116,15 @@ always exact.
   together — removing or reordering a layout never shifts a variant onto a
   neighbour. On Lua-config installs (Hyprland ≥ 0.56 with `hyprland.lua`)
   the file is `~/.config/hypr/input.lua`; older installs keep it in
-  `~/.config/hypr/input.conf`. Nothing else in the file is rewritten, and
-  an edit that would leave `kb_layout` empty is refused.
+  `~/.config/hypr/input.conf`. When the file has no live `kb_layout` line —
+  stock Omarchy ships it commented out and computes the list in the system
+  defaults — the current list is read from the compositor
+  (`hyprctl getoption`) and the first change appends a fresh assignment,
+  extending the list you actually run rather than replacing it. Nothing
+  else in the file is rewritten; inline comments never become part of the
+  list; a value the parser does not fully understand refuses every edit
+  instead of guessing; and an edit that would leave `kb_layout` empty is
+  refused.
 - `hyprctl devices` / `hyprctl switchxkblayout` — read the active layout,
   switch it. Read-only apart from the switch itself.
 - `/usr/share/X11/xkb/rules/{base,evdev}.lst` — read-only, the layout

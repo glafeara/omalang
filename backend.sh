@@ -6,6 +6,12 @@
 # hyprland.lua) the source of truth is the kb_layout line in
 # ~/.config/hypr/input.lua; older installs keep it in input.conf.
 #
+# Stock Omarchy ships input.lua with every kb_layout line commented out — the
+# effective list is computed by the system defaults. When the user file has no
+# live line, the current state is therefore read from the compositor
+# (hyprctl getoption) and the first mutation appends a fresh assignment, so a
+# first Add extends the real list instead of replacing it with one entry.
+#
 # kb_variant is positional and parallel to kb_layout, so every edit here
 # rewrites both lines together — editing only kb_layout would silently shift
 # variants onto the wrong layouts. Because the same layout code can appear
@@ -60,27 +66,41 @@ available() {
 
 # The last active assignment wins in both config dialects, so that is the
 # one we read and edit. Lua comment lines (--) never match the
-# leading-whitespace-then-key pattern, so only live lines are seen. A config
-# without the line yet is a valid starting point, not an error — the
-# trailing || true keeps grep's no-match exit from killing the script under
-# pipefail, so `add` can reach its append-a-fresh-line branch.
+# leading-whitespace-then-key pattern, so only live lines are seen. Inline
+# comments are stripped before the value is taken: a conf `# tail` would
+# otherwise be glued onto the list, and a lua `-- keep "us" first` would
+# hijack the greedy quote match — which is why the lua extraction takes the
+# FIRST quoted string, never the last quote on the line. A config without
+# the line yet is a valid starting point, not an error — the trailing
+# || true keeps grep's no-match exit from killing the script under
+# pipefail, so callers can fall back to the compositor's state.
 read_input_value() { # key
   local key="$1"
   if use_lua; then
-    grep -E "^[[:space:]]*${key}[[:space:]]*=" "$INPUT_LUA" 2>/dev/null \
+    grep -E "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"" "$INPUT_LUA" 2>/dev/null \
       | tail -1 \
-      | sed -E 's/.*"([^"]*)".*/\1/' \
+      | sed -E 's/^[^"]*"([^"]*)".*/\1/' \
       | tr -d ' ' || true
   else
     grep -E "^[[:space:]]*${key}[[:space:]]*=" "$INPUT_CONF" 2>/dev/null \
       | tail -1 \
+      | sed -E 's/[[:space:]]*#.*$//' \
       | sed -E "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//" \
       | tr -d ' ' || true
   fi
 }
 
-current() { read_input_value kb_layout; }
-current_variants() { read_input_value kb_variant; }
+current_file() { read_input_value kb_layout; }
+current_file_variants() { read_input_value kb_variant; }
+
+# What the compositor actually runs — the fallback source of truth when the
+# user file has no live line (stock Omarchy keeps kb_layout commented and
+# computes the list in the system defaults).
+compositor_value() { # kb_layout|kb_variant
+  hyprctl getoption "input:$1" 2>/dev/null \
+    | awk '/^[[:space:]]*str:/ { print $2; exit }' \
+    | tr -d ' ' || true
+}
 
 has_live_line() { # key
   local key="$1"
@@ -92,17 +112,19 @@ has_live_line() { # key
 }
 
 # Rewrites one key's line in place, appending a fresh assignment when no
-# live line exists. No reload here — callers set every line first and
-# reload once.
+# live line exists. The lua append is multi-line on purpose: the read side
+# is anchored on a line starting with the key, and a one-line hl.config
+# call would be invisible to it — written once and never seen again.
+# No reload here — callers set every line first and reload once.
 set_input_value() { # key value
   local key="$1" new="$2"
   if use_lua; then
     if grep -qE "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"" "$INPUT_LUA"; then
       sed -i -E "s|^([[:space:]]*${key}[[:space:]]*=[[:space:]]*\")[^\"]*(\".*)|\1${new}\2|" "$INPUT_LUA"
     else
-      # No live assignment to edit — append one; later hl.config calls
-      # override earlier ones, so this wins over the Omarchy default.
-      printf '\nhl.config({ input = { %s = "%s" } })\n' "$key" "$new" >>"$INPUT_LUA"
+      # Later hl.config calls override earlier ones, so this wins over the
+      # Omarchy default.
+      printf '\nhl.config({\n  input = {\n    %s = "%s",\n  },\n})\n' "$key" "$new" >>"$INPUT_LUA"
     fi
   else
     if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$INPUT_CONF" 2>/dev/null; then
@@ -113,20 +135,44 @@ set_input_value() { # key value
   fi
 }
 
+# Every token that will ever be written back must match what `add` accepts.
+# A value that fails this came from a config this parser does not fully
+# understand — refusing to touch it is the only edit that cannot corrupt
+# it. This also keeps sed replacements safe: validated tokens contain no
+# sed metacharacters (| & \ ").
+valid_code() { [[ $1 =~ ^[a-z0-9_]+$ ]]; }
+valid_variant() { [[ -z $1 || $1 =~ ^[a-zA-Z0-9_-]+$ ]]; }
+
 # Loads the parallel lists into $layouts / $variants, with variants padded
 # (or truncated) to the layouts' length so every index addresses a pair.
+# Falls back to the compositor when the file has no live kb_layout line.
 layouts=()
 variants=()
 read_state() {
   local cur vcur i
-  cur="$(current)"
-  vcur="$(current_variants)"
+  cur="$(current_file)"
+  if [[ -n $cur ]]; then
+    vcur="$(current_file_variants)"
+  else
+    cur="$(compositor_value kb_layout)"
+    vcur="$(compositor_value kb_variant)"
+  fi
   layouts=()
   variants=()
   [[ -n $cur ]] && IFS=',' read -ra layouts <<<"$cur"
   [[ -n $vcur ]] && IFS=',' read -ra variants <<<"$vcur"
   for ((i = ${#variants[@]}; i < ${#layouts[@]}; i++)); do variants[i]=""; done
   variants=("${variants[@]:0:${#layouts[@]}}")
+  for ((i = 0; i < ${#layouts[@]}; i++)); do
+    valid_code "${layouts[i]}" || {
+      echo "unparseable kb_layout entry: '${layouts[i]}' — fix the config by hand" >&2
+      exit 1
+    }
+    valid_variant "${variants[i]}" || {
+      echo "unparseable kb_variant entry: '${variants[i]}' — fix the config by hand" >&2
+      exit 1
+    }
+  done
 }
 
 join() { local IFS=','; echo "$*"; }
@@ -158,16 +204,20 @@ case "${1:-}" in
     available
     ;;
   current)
-    current
+    # The effective list: the file's when it has a live line, else the
+    # compositor's — the same view every mutation starts from.
+    read_state
+    join "${layouts[@]}"
     ;;
   variants)
-    current_variants
+    read_state
+    join "${variants[@]}"
     ;;
   add)
     code="${2:?usage: backend.sh add <layout-code> [<variant>]}"
     variant="${3:-}"
-    [[ $code =~ ^[a-z0-9_]+$ ]] || { echo "invalid layout code: $code" >&2; exit 1; }
-    [[ -z $variant || $variant =~ ^[a-zA-Z0-9_-]+$ ]] || { echo "invalid variant: $variant" >&2; exit 1; }
+    valid_code "$code" || { echo "invalid layout code: $code" >&2; exit 1; }
+    valid_variant "$variant" || { echo "invalid variant: $variant" >&2; exit 1; }
     read_state
     for ((i = 0; i < ${#layouts[@]}; i++)); do
       [[ ${layouts[i]} == "$code" && ${variants[i]} == "$variant" ]] && exit 0

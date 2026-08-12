@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "glafeara.languages",
   "name": "Omalang",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "glafeara",
   "license": "MIT",
   "description": "Keyboard layout manager for the Omarchy bar: switch layouts, add and remove languages, with a centered on-screen indicator after every switch.",

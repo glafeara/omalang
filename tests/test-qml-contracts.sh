@@ -56,6 +56,31 @@ expect "every setting the QML reads is declared in the manifest schema" \
 expect "OSD window keeps an empty input mask" \
   'grep -q "mask: Region {}" "$panel"'
 
+# Omarchy instantiates the widget once per monitor; OSD and IPC are seat-
+# global and must stay single-owner or N monitors flash N stacked windows.
+expect "OSD and IPC are gated to a single primary instance" \
+  'grep -q "property bool primaryInstance" "$panel" && grep -q "if (!root.primaryInstance) return" "$panel" && grep -q "enabled: root.primaryInstance" "$panel"'
+
+# A refresh during an in-flight devices query must queue, not vanish — the
+# in-flight reply carries pre-switch state and the next poll is 10s away.
+expect "dropped refreshes are queued and re-run, with a stall guard" \
+  'grep -q "refreshPending" "$panel" && grep -q "queryStallTimer" "$panel"'
+
+# With no catalog match activeIndex is -1 and (i+1)%n would pin cycling to
+# row 0 — Hyprland must do the cycling then.
+expect "cycling falls back to switchxkblayout next when the catalog cannot match" \
+  'grep -q "switchxkblayout all next" "$panel"'
+
+# One SUPER+SPACE emits activelayout once per device; adopting the keymap in
+# the event handler is what keeps replays from flashing twice.
+expect "the event handler adopts the new keymap before the async refresh" \
+  'grep -A3 "root.showOsd(root.labelForKeymap(keymap))" "$panel" | grep -q "root.activeKeymap = keymap"'
+
+# The manifest bounds osdDurationMs; a hand-edited settings file must not
+# park the flash on screen for minutes.
+expect "OSD duration is clamped in QML, not only in the manifest" \
+  'grep -q "Math.min(5000, Math.max(200," "$panel"'
+
 echo "----"
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

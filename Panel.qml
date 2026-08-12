@@ -20,6 +20,18 @@ Panel {
 
   readonly property string backendPath: String(Qt.resolvedUrl("backend.sh")).replace(/^file:\/\//, "")
 
+  // Omarchy builds one bar — and so one instance of this widget — per
+  // monitor. Layout state is global to the seat, so exactly one instance
+  // (the one on the first screen) owns the OSD and the IPC target; the
+  // rest only paint their bar label and panel. Without this, N monitors
+  // mean N stacked OSD windows and duplicate IPC handlers on one target.
+  readonly property bool primaryInstance: {
+    var w = root.QsWindow.window
+    var screens = Quickshell.screens
+    if (!w || !w.screen || screens.length === 0) return true
+    return String(w.screen.name) === String(screens[0].name)
+  }
+
   property string keyboardName: ""
   // {code, variant} pairs in kb_layout order, e.g. [{us,""},{us,"dvorak"}],
   // read from hyprctl so the panel always reflects what the compositor
@@ -89,16 +101,27 @@ Panel {
     return String(base || keyFor(entry))
   }
 
+  // A refresh that lands while a devices query is in flight must not be
+  // dropped — the in-flight query carries pre-switch state, and the next
+  // scheduled poll can be 10s away. It is queued and re-run when the query
+  // exits, stock keyboard-layout-widget style.
+  property bool refreshPending: false
   function refresh() {
-    if (!queryProc.running) queryProc.running = true
+    if (queryProc.running) {
+      root.refreshPending = true
+      return
+    }
+    queryProc.running = true
   }
 
-  // fcitx5 binds a virtual keyboard that takes over the seat's main flag, so
-  // on such setups no real keyboard is ever main — fall back to a device that
-  // looks like an actual keyboard, then to any real device at all (they all
-  // report the same layout state anyway).
+  // fcitx5, ydotool and friends bind virtual keyboards that can take over
+  // the seat's main flag, so on such setups no real keyboard is ever main —
+  // fall back to a device that looks like an actual keyboard, then to any
+  // real device at all (they all report the same layout state anyway). A
+  // roster of nothing but virtual devices resolves to none: guessing from
+  // a virtual keyboard would pin the bar to its stale layout.
   function selectKeyboard(keyboards) {
-    const typed = keyboards.filter(k => !String(k.name).startsWith("hl-virtual-keyboard"))
+    const typed = keyboards.filter(k => String(k.name).indexOf("virtual") === -1)
     return typed.find(k => k.main)
       ?? typed.find(k => k.name === root.keyboardName)
       ?? typed.find(k => String(k.name).indexOf("keyboard") !== -1)
@@ -117,14 +140,24 @@ Panel {
 
   function cycleLayout() {
     if (root.layouts.length < 2) return
+    // When the catalog cannot name the active keymap (missing rules file,
+    // exotic layout) activeIndex is -1 and index arithmetic would always
+    // land on 0 — let Hyprland do the cycling instead.
+    if (root.activeIndex < 0) {
+      if (!root.bar) return
+      root.bar.run("hyprctl switchxkblayout all next")
+      refreshTimer.restart()
+      return
+    }
     switchTo((root.activeIndex + 1) % root.layouts.length)
   }
 
   function runBackend(args) {
-    if (actionProc.running) return
+    if (actionProc.running) return false
     root.busy = true
     actionProc.command = ["bash", root.backendPath].concat(args.map(String))
     actionProc.running = true
+    return true
   }
 
   // Accepts a catalog key: "us" or "us(dvorak)".
@@ -142,13 +175,18 @@ Panel {
   }
 
   // Order is meaning here: the first layout is the default and SUPER+SPACE
-  // cycles in list order. The cursor follows the row it was on.
+  // cycles in list order. The cursor follows the row it was on — but only
+  // once the backend actually accepted the move; a busy backend must not
+  // leave the cursor pointing at a neighbour of an unchanged list, and a
+  // failed move puts it back.
+  property int _cursorBeforeMove: -1
   function moveLayout(index, delta) {
     var to = index + delta
     if (index < 0 || index >= root.layouts.length) return
     if (to < 0 || to >= root.layouts.length) return
+    if (!runBackend(["move", index, to])) return
+    root._cursorBeforeMove = index
     root.cursorIndex = to
-    runBackend(["move", index, to])
   }
 
   function moveCursor(dy) {
@@ -165,6 +203,7 @@ Panel {
   }
 
   function showOsd(label) {
+    if (!root.primaryInstance) return
     if (setting("showOsd", true) !== true || label === "") return
     root.osdText = label
     root.osdVisible = true
@@ -187,6 +226,9 @@ Panel {
   }
 
   IpcHandler {
+    // Only one instance may claim the target — two handlers on one target
+    // is a bug in Omarchy's book, and layout state is seat-global anyway.
+    enabled: root.primaryInstance
     target: root.ipcTarget
     function open(): void { root.open() }
     function close(): void { root.close() }
@@ -234,21 +276,30 @@ Panel {
     target: Hyprland
     function onRawEvent(event) {
       if (!event || !event.name) return
-      if (String(event.name).indexOf("activelayout") === -1) return
+      var name = String(event.name)
+      // A config reload can change kb_layout without emitting activelayout.
+      if (name === "configreloaded") {
+        root.refresh()
+        return
+      }
+      if (name.indexOf("activelayout") === -1) return
       var data = String(event.data || "")
-      // "KEYBOARDNAME,LAYOUTNAME" — skip the input method's virtual keyboard
-      // so its stale us layout never flashes on screen.
-      if (data.startsWith("hl-virtual-keyboard")) return
+      // "KEYBOARDNAME,LAYOUTNAME" — skip virtual keyboards (fcitx5,
+      // ydotool) so their stale layout never flashes on screen.
       var comma = data.indexOf(",")
-      if (comma > 0) {
-        // Hyprland replays activelayout on startup and whenever a device
-        // (re)appears — a bluetooth headset connecting is enough. Only an
-        // actual change of keymap is a switch worth flashing on screen, and
-        // until the first devices query lands there is nothing to compare
-        // against, so stay quiet.
-        var keymap = data.substring(comma + 1)
-        if (root.activeKeymap !== "" && keymap !== root.activeKeymap)
-          root.showOsd(root.labelForKeymap(keymap))
+      if (comma <= 0) return
+      if (data.substring(0, comma).indexOf("virtual") !== -1) return
+      // Hyprland replays activelayout on startup and whenever a device
+      // (re)appears — a bluetooth headset connecting is enough, and one
+      // SUPER+SPACE emits the event once per device. Only an actual change
+      // of keymap is a switch worth flashing, and adopting the new keymap
+      // right here — before the async devices query lands — is what keeps
+      // the second device's replay from flashing a second time. Until the
+      // first devices query there is nothing to compare against: stay quiet.
+      var keymap = data.substring(comma + 1)
+      if (root.activeKeymap !== "" && keymap !== root.activeKeymap) {
+        root.showOsd(root.labelForKeymap(keymap))
+        root.activeKeymap = keymap
       }
       root.refresh()
     }
@@ -257,6 +308,17 @@ Panel {
   Process {
     id: queryProc
     command: ["hyprctl", "-j", "devices"]
+    onRunningChanged: {
+      if (running) {
+        queryStallTimer.restart()
+        return
+      }
+      queryStallTimer.stop()
+      if (root.refreshPending) {
+        root.refreshPending = false
+        Qt.callLater(root.refresh)
+      }
+    }
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -322,10 +384,24 @@ Panel {
     }
     onExited: function(exitCode) {
       root.busy = false
-      if (exitCode === 0) root.lastError = ""
+      if (exitCode === 0) {
+        root.lastError = ""
+      } else if (root._cursorBeforeMove >= 0) {
+        // The move never happened; put the cursor back on the row it left.
+        root.cursorIndex = root._cursorBeforeMove
+      }
+      root._cursorBeforeMove = -1
       root.refresh()
       refreshTimer.restart()
     }
+  }
+
+  // A hung hyprctl must not wedge the widget: queryProc.running would stay
+  // true and every later refresh would queue behind it forever.
+  Timer {
+    id: queryStallTimer
+    interval: 5000
+    onTriggered: queryProc.running = false
   }
 
   // hyprctl needs a beat before devices reports the new state.
@@ -344,7 +420,9 @@ Panel {
 
   Timer {
     id: osdTimer
-    interval: Math.max(200, Number(root.setting("osdDurationMs", 750)) || 750)
+    // Clamped to the manifest schema's range — a hand-edited settings value
+    // must not park the flash on screen for minutes.
+    interval: Math.min(5000, Math.max(200, Number(root.setting("osdDurationMs", 750)) || 750))
     onTriggered: root.osdVisible = false
   }
 
