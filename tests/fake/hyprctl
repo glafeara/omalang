@@ -1,0 +1,5 @@
+#!/bin/bash
+# Fake hyprctl: records every invocation so tests can assert that a write
+# was followed by exactly one reload, and that a no-op wasn't.
+echo "$@" >> "${FAKE_LOG:?FAKE_LOG not set}"
+exit 0

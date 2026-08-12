@@ -1,0 +1,15 @@
+name: Test plugin
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Shell syntax
+        run: bash -n backend.sh tests/*.sh tests/fake/*
+      - name: Backend regression suite
+        run: bash tests/run.sh

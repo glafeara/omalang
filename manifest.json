@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "id": "glafeara.languages",
+  "name": "Omalang",
+  "version": "1.0.0",
+  "author": "glafeara",
+  "license": "MIT",
+  "description": "Keyboard layout manager for the Omarchy bar: switch layouts, add and remove languages, with a centered on-screen indicator after every switch.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Omalang",
+    "description": "Current layout on the bar. Left click opens the panel to switch, add or remove languages; right click cycles layouts. A centered OSD shows the layout abbreviation after each switch.",
+    "category": "Input",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "osdDurationMs": 750,
+      "showOsd": true
+    },
+    "schema": [
+      {
+        "key": "osdDurationMs",
+        "type": "integer",
+        "label": "OSD duration (ms)",
+        "min": 200,
+        "max": 5000,
+        "step": 100,
+        "defaultValue": 750
+      },
+      {
+        "key": "showOsd",
+        "type": "boolean",
+        "label": "Show centered indicator on layout switch",
+        "defaultValue": true
+      }
+    ]
+  }
+}
