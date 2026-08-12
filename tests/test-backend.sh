@@ -3,6 +3,8 @@
 # config files — the only way to exercise both config dialects (input.conf
 # and input.lua), since their kb_layout lines are edited by different sed
 # patterns and a mistake in either silently corrupts the user's input file.
+# kb_variant is positional and parallel to kb_layout, so every mutation is
+# checked for keeping the two lists in step.
 set -u
 here="$(cd "$(dirname "$0")" && pwd)"
 backend="$here/../backend.sh"
@@ -37,6 +39,7 @@ fresh() { # [conf|lua]
 
 ! variant
   dvorak          us: English (Dvorak)
+  phonetic        ru: Russian (Phonetic)
 EOF
 }
 
@@ -52,10 +55,10 @@ reloads() { grep -cx "reload" "$FAKE_LOG"; }
 
 fresh conf
 out="$(bash "$backend" available)"; rc=$?
-expect "available: layout section only, code<TAB>name" \
-  '[ "$rc" = 0 ] && [ "$(printf "%s\n" "$out" | wc -l)" = 3 ] && printf "%s\n" "$out" | grep -qx "ru	Russian" && ! printf "%s\n" "$out" | grep -q pc86 && ! printf "%s\n" "$out" | grep -q dvorak'
+expect "available: layouts and variants, code<TAB>name" \
+  '[ "$rc" = 0 ] && [ "$(printf "%s\n" "$out" | wc -l)" = 5 ] && printf "%s\n" "$out" | grep -qx "ru	Russian" && printf "%s\n" "$out" | grep -qx "us(dvorak)	English (Dvorak)" && ! printf "%s\n" "$out" | grep -q pc86'
 
-# --- current ---------------------------------------------------------------
+# --- current / variants ----------------------------------------------------
 
 fresh conf
 out="$(bash "$backend" current)"
@@ -70,12 +73,17 @@ printf -- '-- kb_layout = "xx"\nhl.config({\n  input = {\n    kb_layout = "us",\
 out="$(bash "$backend" current)"
 expect "lua: comment lines never win" '[ "$out" = "us" ]'
 
+fresh conf
+printf 'input {\n  kb_layout = us,ru\n  kb_variant = ,phonetic\n}\n' > "$LANGUAGES_INPUT_CONF"
+out="$(bash "$backend" variants)"
+expect "conf: variants reads kb_variant" '[ "$out" = ",phonetic" ]'
+
 # --- add -------------------------------------------------------------------
 
 fresh conf
 bash "$backend" add de; rc=$?
 expect "conf: add appends the code and reloads once" \
-  '[ "$rc" = 0 ] && grep -qE "^  kb_layout = us,ru,de$" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 1 ]'
+  '[ "$rc" = 0 ] && grep -qE "^  kb_layout = us,ru,de$" "$LANGUAGES_INPUT_CONF" && ! grep -q kb_variant "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 1 ]'
 
 fresh conf
 bash "$backend" add ru; rc=$?
@@ -93,6 +101,11 @@ bash "$backend" add 'de;rm -rf /' >/dev/null 2>&1; rc=$?
 expect "add: a code that is not [a-z0-9_]+ is rejected before any write" \
   '[ "$rc" != 0 ] && grep -qE "^  kb_layout = us,ru$" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 0 ]'
 
+fresh conf
+bash "$backend" add us 'dvo rak' >/dev/null 2>&1; rc=$?
+expect "add: an invalid variant is rejected before any write" \
+  '[ "$rc" != 0 ] && ! grep -q kb_variant "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 0 ]'
+
 fresh lua
 bash "$backend" add de; rc=$?
 expect "lua: add edits the quoted assignment in place" \
@@ -104,28 +117,94 @@ bash "$backend" add de; rc=$?
 expect "lua: add with no live assignment appends an hl.config call" \
   '[ "$rc" = 0 ] && grep -qF "hl.config({ input = { kb_layout = \"de\" } })" "$LANGUAGES_INPUT_LUA"'
 
+# --- add with variants -----------------------------------------------------
+
+fresh conf
+bash "$backend" add us dvorak; rc=$?
+expect "conf: adding a variant creates a padded kb_variant line" \
+  '[ "$rc" = 0 ] && grep -qE "^  kb_layout = us,ru,us$" "$LANGUAGES_INPUT_CONF" && grep -qE "^  kb_variant = ,,dvorak$" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 1 ]'
+
+fresh conf
+bash "$backend" add us dvorak && bash "$backend" add us dvorak; rc=$?
+expect "conf: duplicate code+variant pair is a no-op" \
+  '[ "$rc" = 0 ] && grep -qE "^  kb_layout = us,ru,us$" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 1 ]'
+
+fresh conf
+bash "$backend" add us dvorak && bash "$backend" add us; rc=$?
+expect "conf: same code with and without variant are distinct entries" \
+  '[ "$rc" = 0 ] && grep -qE "^  kb_layout = us,ru,us$" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 1 ]'
+
+fresh lua
+bash "$backend" add ru phonetic; rc=$?
+expect "lua: adding a variant appends a padded kb_variant assignment" \
+  '[ "$rc" = 0 ] && grep -qF "kb_layout = \"us,ru,ru\"" "$LANGUAGES_INPUT_LUA" && grep -qF "kb_variant = \",,phonetic\"" "$LANGUAGES_INPUT_LUA"'
+
 # --- remove ----------------------------------------------------------------
 
 fresh conf
-bash "$backend" remove us; rc=$?
-expect "conf: remove keeps the rest, untouched lines stay" \
+bash "$backend" remove 0; rc=$?
+expect "conf: remove by index keeps the rest, untouched lines stay" \
   '[ "$rc" = 0 ] && grep -qE "^  kb_layout = ru$" "$LANGUAGES_INPUT_CONF" && grep -q kb_options "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 1 ]'
 
+fresh conf
+printf 'input {\n  kb_layout = us,ru,de\n  kb_variant = dvorak,,\n}\n' > "$LANGUAGES_INPUT_CONF"
+bash "$backend" remove 0; rc=$?
+expect "conf: removing a layout removes its variant slot, not another's" \
+  '[ "$rc" = 0 ] && grep -qE "^  kb_layout = ru,de$" "$LANGUAGES_INPUT_CONF" && grep -qE "^  kb_variant = $" "$LANGUAGES_INPUT_CONF"'
+
+fresh conf
+printf 'input {\n  kb_layout = us,ru\n  kb_variant = dvorak,phonetic\n}\n' > "$LANGUAGES_INPUT_CONF"
+bash "$backend" remove 0; rc=$?
+expect "conf: the surviving layout keeps its own variant" \
+  '[ "$rc" = 0 ] && grep -qE "^  kb_layout = ru$" "$LANGUAGES_INPUT_CONF" && grep -qE "^  kb_variant = phonetic$" "$LANGUAGES_INPUT_CONF"'
+
 fresh lua
-bash "$backend" remove ru; rc=$?
+bash "$backend" remove 1; rc=$?
 expect "lua: remove rewrites the quoted list" \
   '[ "$rc" = 0 ] && grep -qF "kb_layout = \"us\"" "$LANGUAGES_INPUT_LUA"'
 
 fresh conf
 printf 'input {\n  kb_layout = us\n}\n' > "$LANGUAGES_INPUT_CONF"
-bash "$backend" remove us >/dev/null 2>&1; rc=$?
+bash "$backend" remove 0 >/dev/null 2>&1; rc=$?
 expect "remove: the last remaining layout is refused, no reload" \
   '[ "$rc" != 0 ] && grep -qE "^  kb_layout = us$" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 0 ]'
 
 fresh conf
-bash "$backend" remove de; rc=$?
-expect "remove: an absent code leaves the list as it was" \
-  '[ "$rc" = 0 ] && grep -qE "^  kb_layout = us,ru$" "$LANGUAGES_INPUT_CONF"'
+bash "$backend" remove 5 >/dev/null 2>&1; rc=$?
+expect "remove: an out-of-range index is refused, no reload" \
+  '[ "$rc" != 0 ] && grep -qE "^  kb_layout = us,ru$" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 0 ]'
+
+fresh conf
+bash "$backend" remove us >/dev/null 2>&1; rc=$?
+expect "remove: a non-numeric argument is refused" '[ "$rc" != 0 ]'
+
+# --- move ------------------------------------------------------------------
+
+fresh conf
+printf 'input {\n  kb_layout = us,ru,de\n  kb_variant = dvorak,,\n}\n' > "$LANGUAGES_INPUT_CONF"
+bash "$backend" move 0 2; rc=$?
+expect "conf: move carries the variant with its layout" \
+  '[ "$rc" = 0 ] && grep -qE "^  kb_layout = ru,de,us$" "$LANGUAGES_INPUT_CONF" && grep -qE "^  kb_variant = ,,dvorak$" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 1 ]'
+
+fresh conf
+bash "$backend" move 1 0; rc=$?
+expect "conf: move to the front changes the default layout" \
+  '[ "$rc" = 0 ] && grep -qE "^  kb_layout = ru,us$" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 1 ]'
+
+fresh conf
+bash "$backend" move 1 1; rc=$?
+expect "move: same from and to is a no-op, no reload" \
+  '[ "$rc" = 0 ] && grep -qE "^  kb_layout = us,ru$" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 0 ]'
+
+fresh conf
+bash "$backend" move 0 5 >/dev/null 2>&1; rc=$?
+expect "move: an out-of-range target is refused" \
+  '[ "$rc" != 0 ] && grep -qE "^  kb_layout = us,ru$" "$LANGUAGES_INPUT_CONF" && [ "$(reloads)" = 0 ]'
+
+fresh lua
+bash "$backend" move 0 1; rc=$?
+expect "lua: move rewrites the quoted list" \
+  '[ "$rc" = 0 ] && grep -qF "kb_layout = \"ru,us\"" "$LANGUAGES_INPUT_LUA"'
 
 # --- usage -----------------------------------------------------------------
 

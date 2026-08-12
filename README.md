@@ -46,20 +46,34 @@ shell script.
 opens and closes the panel, right click cycles to the next layout.
 
 **In the panel:** click a language to switch to it. The active one is
-marked with a check. Hovering a row shows its trash-can button — that
-removes the language from the layout list (the last remaining language
-cannot be removed). "Add language…" opens a search over every layout the
-system's xkb catalog knows; picking one appends it to the list.
+marked with a check. The row under the cursor shows three buttons: arrows
+move the language up and down the list, the trash can removes it (the last
+remaining language cannot be removed). Order is meaning — the first layout
+is the default and `SUPER+SPACE` cycles in list order. "Add language…"
+opens a search over every layout *and variant* the system's xkb catalog
+knows — English (Dvorak), Russian (Phonetic) and friends are entries of
+their own, so the same code can appear twice with different variants.
+
+| Key | Action |
+| --- | --- |
+| `j` / `k`, arrows | move the cursor |
+| `Enter`, `Space` | switch to the selected language |
+| `J` / `K` | move the selected language down / up the list |
+| `x` | remove the selected language |
+| `a`, `/` | open the language search |
+| `r` | refresh |
+| `Esc` | close |
 
 **The indicator:** after every layout switch — from the panel, the bar's
 right click, or the Hyprland keybinding — the new layout's abbreviation
-flashes in the middle of the screen, in the same card style as the stock
-Omarchy OSDs. It is visual only: its input region is empty, so it never
-steals a click or a keystroke from what you are typing. Device replays are
-filtered out — Hyprland re-announces the layout when a device (re)appears,
-a connecting bluetooth headset included, and that is not a switch worth
-flashing. On input-method setups (fcitx5) the virtual keyboard's stale
-state is ignored too.
+flashes in the middle of the focused monitor: where you are typing, not
+where the bar happens to live. It is drawn in the same card style as the
+stock Omarchy OSDs and is visual only: its input region is empty, so it
+never steals a click or a keystroke from what you are typing. Device
+replays are filtered out — Hyprland re-announces the layout when a device
+(re)appears, a connecting bluetooth headset included, and that is not a
+switch worth flashing. On input-method setups (fcitx5) the virtual
+keyboard's stale state is ignored too.
 
 **Switching is compositor-wide** (`switchxkblayout all`), the same thing
 the stock Omarchy keybinding does, so the widget and the keybinding never
@@ -80,17 +94,28 @@ omarchy bar set glafeara.languages showOsd false   # no flash on switch
 ## IPC
 
 ```bash
-omarchy-shell glafeara.languages open     # also: close, toggle
+omarchy-shell glafeara.languages status          # "ru", "us(dvorak)"
+omarchy-shell glafeara.languages list            # index, key, name; * marks active
+omarchy-shell glafeara.languages next            # cycle to the next layout
+omarchy-shell glafeara.languages set ru          # by code, key or index from list
+omarchy-shell glafeara.languages open            # also: close, toggle
 ```
+
+`status` and `set` speak the same keys, so `set "$(… status)"` round-trips.
+A bare code matches the first entry using it; an index from `list` is
+always exact.
 
 ## What it touches
 
-- **Your Hyprland input config** — the single `kb_layout` line, edited in
-  place, followed by `hyprctl reload` so the change applies immediately.
-  On Lua-config installs (Hyprland ≥ 0.56 with `hyprland.lua`) that is
-  `~/.config/hypr/input.lua`; older installs keep it in
+- **Your Hyprland input config** — the `kb_layout` line and, when variants
+  are in play, the `kb_variant` line, edited in place and followed by
+  `hyprctl reload` so the change applies immediately. `kb_variant` is
+  positional and parallel to `kb_layout`, so the two are always rewritten
+  together — removing or reordering a layout never shifts a variant onto a
+  neighbour. On Lua-config installs (Hyprland ≥ 0.56 with `hyprland.lua`)
+  the file is `~/.config/hypr/input.lua`; older installs keep it in
   `~/.config/hypr/input.conf`. Nothing else in the file is rewritten, and
-  an edit that would leave the line empty is refused.
+  an edit that would leave `kb_layout` empty is refused.
 - `hyprctl devices` / `hyprctl switchxkblayout` — read the active layout,
   switch it. Read-only apart from the switch itself.
 - `/usr/share/X11/xkb/rules/{base,evdev}.lst` — read-only, the layout
@@ -103,7 +128,8 @@ services, no network, no telemetry.
 
 `tests/` holds a backend suite that runs against a fake `hyprctl` and
 temporary config files — both the `input.conf` and the `input.lua`
-dialects, since the sed edits differ:
+dialects, since the sed edits differ — plus static checks pinning the
+Panel↔backend contracts (index-based remove/move, ids, settings keys):
 
 ```bash
 bash tests/run.sh

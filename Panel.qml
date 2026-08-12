@@ -14,12 +14,17 @@ Panel {
   id: root
   moduleName: "glafeara.languages"
   ipcTarget: "glafeara.languages"
+  // The base Panel would publish open/close/toggle for this target; the
+  // handler below does that and more, so keep the base one off.
+  manageIpc: false
 
   readonly property string backendPath: String(Qt.resolvedUrl("backend.sh")).replace(/^file:\/\//, "")
 
   property string keyboardName: ""
-  // xkb codes in kb_layout order, e.g. ["us", "ru"], read from hyprctl so the
-  // panel always reflects what the compositor actually runs.
+  // {code, variant} pairs in kb_layout order, e.g. [{us,""},{us,"dvorak"}],
+  // read from hyprctl so the panel always reflects what the compositor
+  // actually runs. Kept as pairs because the same code can appear twice
+  // with different variants — rows are addressed by index, never by code.
   property var layouts: []
   property string activeKeymap: ""
   // code -> display name and back, parsed from the system xkb rules list.
@@ -32,20 +37,32 @@ Panel {
   property string osdText: ""
   property bool osdVisible: false
 
+  // Keyboard-and-mouse row cursor, per the CursorSurface contract: hover and
+  // key presses both move this one root-level state, so exactly one row is
+  // highlighted no matter how it got the cursor.
+  property int cursorIndex: -1
+  property bool cursorActive: false
+
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property color hoverFill: bar ? Style.hoverFillFor(bar.foreground, Color.accent) : "transparent"
 
+  // Catalog key for a pair: "us" or "us(dvorak)" — the same shape the
+  // backend's `available` emits and the IPC talks.
+  function keyFor(entry) {
+    return entry.variant ? entry.code + "(" + entry.variant + ")" : entry.code
+  }
+
   readonly property int activeIndex: {
     for (var i = 0; i < layouts.length; i++) {
-      if (String(namesByCode[layouts[i]] || "") === activeKeymap) return i
+      if (String(namesByCode[keyFor(layouts[i])] || "") === activeKeymap) return i
     }
     return -1
   }
 
   readonly property string barLabel: activeIndex >= 0
-    ? abbrevFor(layouts[activeIndex])
+    ? abbrevFor(layouts[activeIndex].code)
     : (activeKeymap !== "" ? fallbackAbbrev(activeKeymap) : "")
 
   function abbrevFor(code) {
@@ -59,12 +76,17 @@ Panel {
   }
 
   function labelForKeymap(keymap) {
-    var code = codesByName[String(keymap)]
-    return code ? abbrevFor(code) : fallbackAbbrev(keymap)
+    var key = codesByName[String(keymap)]
+    // Variant keys look like "us(dvorak)"; the flash shows the code alone.
+    return key ? abbrevFor(String(key).replace(/\(.*$/, "")) : fallbackAbbrev(keymap)
   }
 
-  function nameFor(code) {
-    return String(namesByCode[code] || code)
+  function nameFor(entry) {
+    var named = namesByCode[keyFor(entry)]
+    if (named) return String(named)
+    var base = namesByCode[entry.code]
+    if (base && entry.variant) return String(base) + " (" + entry.variant + ")"
+    return String(base || keyFor(entry))
   }
 
   function refresh() {
@@ -101,18 +123,45 @@ Panel {
   function runBackend(args) {
     if (actionProc.running) return
     root.busy = true
-    actionProc.command = ["bash", root.backendPath].concat(args)
+    actionProc.command = ["bash", root.backendPath].concat(args.map(String))
     actionProc.running = true
   }
 
-  function addLanguage(code) {
-    if (!code) return
-    runBackend(["add", String(code)])
+  // Accepts a catalog key: "us" or "us(dvorak)".
+  function addLanguage(key) {
+    if (!key) return
+    var m = String(key).match(/^([a-z0-9_]+)\((.+)\)$/)
+    if (m) runBackend(["add", m[1], m[2]])
+    else runBackend(["add", key])
   }
 
-  function removeLanguage(code) {
+  function removeLanguage(index) {
     if (root.layouts.length < 2) return
-    runBackend(["remove", String(code)])
+    if (index < 0 || index >= root.layouts.length) return
+    runBackend(["remove", index])
+  }
+
+  // Order is meaning here: the first layout is the default and SUPER+SPACE
+  // cycles in list order. The cursor follows the row it was on.
+  function moveLayout(index, delta) {
+    var to = index + delta
+    if (index < 0 || index >= root.layouts.length) return
+    if (to < 0 || to >= root.layouts.length) return
+    root.cursorIndex = to
+    runBackend(["move", index, to])
+  }
+
+  function moveCursor(dy) {
+    if (root.layouts.length === 0) return
+    root.cursorActive = true
+    if (root.cursorIndex < 0)
+      root.cursorIndex = root.activeIndex >= 0 ? root.activeIndex : 0
+    else
+      root.cursorIndex = Math.max(0, Math.min(root.layouts.length - 1, root.cursorIndex + dy))
+  }
+
+  onLayoutsChanged: {
+    if (cursorIndex >= layouts.length) cursorIndex = layouts.length - 1
   }
 
   function showOsd(label) {
@@ -130,8 +179,54 @@ Panel {
   onOpenedChanged: {
     if (opened) {
       root.lastError = ""
+      root.cursorActive = false
+      root.cursorIndex = -1
       refresh()
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    }
+  }
+
+  IpcHandler {
+    target: root.ipcTarget
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function toggle(): void { root.toggle() }
+    // The active layout's catalog key ("us", "us(dvorak)"), so scripts can
+    // feed it straight back into `set`. Falls back to the raw keymap name
+    // when the catalog does not know the active keymap.
+    function status(): string {
+      if (root.activeIndex >= 0) return root.keyFor(root.layouts[root.activeIndex])
+      return root.activeKeymap !== "" ? root.activeKeymap : "unknown"
+    }
+    function list(): string {
+      var lines = []
+      for (var i = 0; i < root.layouts.length; i++)
+        lines.push(i + "\t" + root.keyFor(root.layouts[i]) + "\t" + root.nameFor(root.layouts[i])
+          + (i === root.activeIndex ? "\t*" : ""))
+      return lines.join("\n")
+    }
+    function next(): string {
+      if (root.layouts.length < 2) return "error: only one layout configured"
+      root.cycleLayout()
+      return "ok"
+    }
+    // Takes an index from `list` or a catalog key; a bare code matches the
+    // first entry with that code.
+    function set(target: string): string {
+      var t = String(target).trim()
+      if (t === "") return "error: usage: set <index|code>"
+      if (/^[0-9]+$/.test(t)) {
+        if (Number(t) >= root.layouts.length) return "error: index out of range"
+        root.switchTo(Number(t))
+        return "ok"
+      }
+      for (var i = 0; i < root.layouts.length; i++) {
+        if (root.keyFor(root.layouts[i]) === t || root.layouts[i].code === t) {
+          root.switchTo(i)
+          return "ok"
+        }
+      }
+      return "error: no such layout: " + t
     }
   }
 
@@ -175,7 +270,16 @@ Panel {
 
         root.keyboardName = String(kb.name || "")
         root.activeKeymap = String(kb.active_keymap)
-        root.layouts = String(kb.layout || "").split(",").map(s => s.trim()).filter(s => s !== "")
+        // kb_variant is positional and parallel to kb_layout; keep the pair
+        // together per index so a variant never drifts onto another layout.
+        var codes = String(kb.layout || "").split(",").map(s => s.trim())
+        var vars = String(kb.variant || "").split(",").map(s => s.trim())
+        var pairs = []
+        for (var i = 0; i < codes.length; i++) {
+          if (codes[i] === "") continue
+          pairs.push({ code: codes[i], variant: vars[i] || "" })
+        }
+        root.layouts = pairs
       }
     }
   }
@@ -295,6 +399,21 @@ Panel {
       blocked: addPicker.popupOpen
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
+      onActivateRequested: {
+        if (root.cursorActive && root.cursorIndex >= 0) root.switchTo(root.cursorIndex)
+      }
+      onDeleteRequested: {
+        if (root.cursorActive && root.cursorIndex >= 0) root.removeLanguage(root.cursorIndex)
+      }
+      onTextKey: function(t) {
+        if (t === "a" || t === "/") addPicker.open()
+        else if (t === "r") root.refresh()
+        // Shifted j/k reorder the row under the cursor — order is the
+        // cycle order and the default layout, so it deserves keys too.
+        else if (t === "J" && root.cursorActive) root.moveLayout(root.cursorIndex, 1)
+        else if (t === "K" && root.cursorActive) root.moveLayout(root.cursorIndex, -1)
+      }
 
       Column {
         id: column
@@ -319,16 +438,18 @@ Panel {
             // CursorSurface for the house row chrome: shared hover fill with
             // the hover-cursor border, selected fill on the active layout,
             // and the same 60ms color easing as every other list panel.
+            // Per the CursorSurface contract, visuals derive from the root
+            // cursor state — hover feeds that state instead of painting.
             delegate: CursorSurface {
               id: row
               required property int index
-              required property string modelData
+              required property var modelData
               readonly property bool isActive: index === root.activeIndex
 
               width: column.width
               height: Style.space(34)
               foreground: root.foreground
-              hasCursor: rowMouse.containsMouse
+              hasCursor: root.cursorActive && root.cursorIndex === row.index
               current: isActive
 
               MouseArea {
@@ -337,6 +458,12 @@ Panel {
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.switchTo(row.index)
+                onContainsMouseChanged: {
+                  if (containsMouse) {
+                    root.cursorActive = true
+                    root.cursorIndex = row.index
+                  }
+                }
               }
 
               Text {
@@ -344,7 +471,7 @@ Panel {
                 anchors.left: parent.left
                 anchors.leftMargin: Style.space(8)
                 anchors.verticalCenter: parent.verticalCenter
-                text: root.abbrevFor(row.modelData)
+                text: root.abbrevFor(row.modelData.code)
                 color: row.isActive ? Color.accent : root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -354,7 +481,7 @@ Panel {
               Text {
                 anchors.left: rowAbbrev.right
                 anchors.leftMargin: Style.space(10)
-                anchors.right: removeButton.visible ? removeButton.left
+                anchors.right: rowButtons.visible ? rowButtons.left
                   : (activeCheck.visible ? activeCheck.left : parent.right)
                 anchors.rightMargin: Style.space(8)
                 anchors.verticalCenter: parent.verticalCenter
@@ -365,33 +492,56 @@ Panel {
                 elide: Text.ElideRight
               }
 
-              // One check, at the row's right edge; the hover-only remove
-              // button takes that slot when it shows, so they never stack.
+              // One check, at the row's right edge; the cursor-only action
+              // buttons take that slot when they show, so they never stack.
               Text {
                 id: activeCheck
                 anchors.right: parent.right
                 anchors.rightMargin: Style.space(10)
                 anchors.verticalCenter: parent.verticalCenter
-                visible: row.isActive && !removeButton.visible
+                visible: row.isActive && !rowButtons.visible
                 text: "✓"
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
               }
 
-              PanelActionButton {
-                id: removeButton
+              Row {
+                id: rowButtons
                 anchors.right: parent.right
                 anchors.rightMargin: Style.space(6)
                 anchors.verticalCenter: parent.verticalCenter
-                visible: root.layouts.length > 1 && rowMouse.containsMouse
-                iconText: "󰆴"
-                tooltipText: "Remove"
-                foreground: root.dim
-                hoverColor: root.bar ? root.bar.urgent : Color.urgent
-                fontFamily: root.fontFamily
-                enabled: !root.busy
-                onClicked: root.removeLanguage(row.modelData)
+                spacing: Style.space(2)
+                visible: row.hasCursor
+
+                PanelActionButton {
+                  iconText: "↑"
+                  tooltipText: "Move up"
+                  foreground: root.dim
+                  fontFamily: root.fontFamily
+                  enabled: !root.busy && row.index > 0
+                  onClicked: root.moveLayout(row.index, -1)
+                }
+
+                PanelActionButton {
+                  iconText: "↓"
+                  tooltipText: "Move down"
+                  foreground: root.dim
+                  fontFamily: root.fontFamily
+                  enabled: !root.busy && row.index < root.layouts.length - 1
+                  onClicked: root.moveLayout(row.index, 1)
+                }
+
+                PanelActionButton {
+                  visible: root.layouts.length > 1
+                  iconText: "󰆴"
+                  tooltipText: "Remove"
+                  foreground: root.dim
+                  hoverColor: root.bar ? root.bar.urgent : Color.urgent
+                  fontFamily: root.fontFamily
+                  enabled: !root.busy
+                  onClicked: root.removeLanguage(row.index)
+                }
               }
             }
           }
@@ -432,12 +582,21 @@ Panel {
     }
   }
 
-  // Centered on-screen indicator: a visual-only overlay on this widget's own
-  // monitor, flashing the abbreviation of the layout just switched to.
+  // Centered on-screen indicator flashing the abbreviation of the layout
+  // just switched to. It follows the monitor Hyprland has focused — that is
+  // where the user is typing, which need not be the monitor this widget's
+  // bar instance lives on.
   PanelWindow {
     id: osdWindow
     visible: root.osdVisible
-    screen: root.QsWindow.window ? root.QsWindow.window.screen : null
+    screen: {
+      var focusedName = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
+      var screens = Quickshell.screens
+      for (var i = 0; i < screens.length; i++) {
+        if (String(screens[i].name) === focusedName) return screens[i]
+      }
+      return root.QsWindow.window ? root.QsWindow.window.screen : null
+    }
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     WlrLayershell.namespace: "omalang-osd"
