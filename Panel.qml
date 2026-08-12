@@ -13,8 +13,7 @@ import qs.Ui
 Panel {
   id: root
   moduleName: "glafeara.languages"
-  ipcTarget: ""
-  manageIpc: false
+  ipcTarget: "glafeara.languages"
 
   readonly property string backendPath: String(Qt.resolvedUrl("backend.sh")).replace(/^file:\/\//, "")
 
@@ -402,12 +401,8 @@ Panel {
           foreground: root.foreground
         }
 
-        PanelSectionHeader {
-          text: "ADD LANGUAGE"
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-        }
-
+        // No section header here: the trigger already says "Add language…",
+        // and a header repeating it right above reads as a duplicate.
         SearchableDropdown {
           id: addPicker
           width: column.width

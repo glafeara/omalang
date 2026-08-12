@@ -77,6 +77,12 @@ omarchy bar set glafeara.languages osdDurationMs 1200
 omarchy bar set glafeara.languages showOsd false   # no flash on switch
 ```
 
+## IPC
+
+```bash
+omarchy-shell glafeara.languages open     # also: close, toggle
+```
+
 ## What it touches
 
 - **Your Hyprland input config** — the single `kb_layout` line, edited in
