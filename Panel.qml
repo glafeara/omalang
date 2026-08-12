@@ -54,6 +54,9 @@ Panel {
   // highlighted no matter how it got the cursor.
   property int cursorIndex: -1
   property bool cursorActive: false
+  // Who parked the cursor on its row. A pointer-parked cursor leaves with
+  // the pointer; a keyboard-parked one survives a stray mouse pass-through.
+  property bool cursorFromPointer: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
@@ -192,6 +195,7 @@ Panel {
   function moveCursor(dy) {
     if (root.layouts.length === 0) return
     root.cursorActive = true
+    root.cursorFromPointer = false
     if (root.cursorIndex < 0)
       root.cursorIndex = root.activeIndex >= 0 ? root.activeIndex : 0
     else
@@ -220,6 +224,7 @@ Panel {
       root.lastError = ""
       root.cursorActive = false
       root.cursorIndex = -1
+      root.cursorFromPointer = false
       refresh()
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     }
@@ -540,6 +545,15 @@ Panel {
                   if (containsMouse) {
                     root.cursorActive = true
                     root.cursorIndex = row.index
+                    root.cursorFromPointer = true
+                  } else if (root.cursorFromPointer && root.cursorIndex === row.index) {
+                    // The pointer left and no neighbour claimed the cursor:
+                    // a mouse-parked highlight must not outlive the mouse.
+                    // The index guard keeps enter/exit races between adjacent
+                    // rows from wiping a freshly claimed cursor.
+                    root.cursorActive = false
+                    root.cursorIndex = -1
+                    root.cursorFromPointer = false
                   }
                 }
               }
