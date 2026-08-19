@@ -76,12 +76,17 @@ Panel {
     return -1
   }
 
+  function isOsdEnabled() {
+    var v = setting("showOsd", true)
+    return v === true || v === "true" || v === 1 || v === "1"
+  }
+
   property string currentDisplayMode: String(setting("displayMode", "flag"))
-  property bool currentShowOsd: setting("showOsd", true) === true
+  property bool currentShowOsd: isOsdEnabled()
 
   onSettingsChanged: {
     currentDisplayMode = String(setting("displayMode", "flag"))
-    currentShowOsd = setting("showOsd", true) === true
+    currentShowOsd = isOsdEnabled()
   }
 
   function updateDisplayMode(mode) {
@@ -90,8 +95,9 @@ Panel {
   }
 
   function updateShowOsd(enabled) {
-    currentShowOsd = (enabled === true || enabled === "true")
-    if (root.bar) root.bar.run("omarchy bar set glafeara.languages showOsd " + (currentShowOsd ? "true" : "false"))
+    var boolVal = (enabled === true || enabled === "true" || enabled === 1 || enabled === "1")
+    currentShowOsd = boolVal
+    if (root.bar) root.bar.run("omarchy bar set glafeara.languages showOsd " + (boolVal ? "true" : "false") + " --json")
   }
 
   readonly property string activeCode: {
