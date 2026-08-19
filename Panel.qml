@@ -76,6 +76,22 @@ Panel {
     return -1
   }
 
+  readonly property string displayMode: String(root.setting("displayMode", "flag"))
+
+  readonly property string activeCode: {
+    if (activeIndex >= 0) return String(layouts[activeIndex].code).toLowerCase()
+    var key = codesByName[String(activeKeymap)]
+    if (key) return String(key).replace(/\(.*$/, "").toLowerCase()
+    return fallbackAbbrev(activeKeymap).toLowerCase()
+  }
+
+  function flagPathFor(code) {
+    if (!code) return ""
+    var c = String(code).toLowerCase().trim().replace(/[^a-z0-9_]/g, "")
+    if (c === "en") c = "us"
+    return Qt.resolvedUrl("flags/" + c + ".svg")
+  }
+
   readonly property string barLabel: activeIndex >= 0
     ? abbrevFor(layouts[activeIndex].code)
     : (activeKeymap !== "" ? fallbackAbbrev(activeKeymap) : "")
@@ -439,30 +455,61 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.barLabel
+    text: root.displayMode === "flag" ? "     " : (root.displayMode === "both" ? "       " + root.barLabel : root.barLabel)
     fontSize: Style.font.body
-    horizontalMargin: 7
+    horizontalMargin: root.displayMode === "flag" ? 6 : 7
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.cycleLayout()
       else root.toggle()
     }
 
-    // The stock label is 10px regular — too faint to read at a glance next to
-    // the bar's 13px icons. Hide it (it still sizes the slot) and paint the
-    // abbreviation bold at body size instead.
     labelVisible: false
 
-    Text {
+    Row {
       anchors.centerIn: parent
-      // Box-centering puts cap-height ink a hair above the optical center the
-      // bar icons sit on; one pixel down lines the label up with them.
-      anchors.verticalCenterOffset: 1
-      text: root.barLabel
-      color: button.active && button.useActiveColor ? button.activeColor : button.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.body
-      font.bold: true
-      renderType: Text.NativeRendering
+      anchors.verticalCenterOffset: 0
+      spacing: Style.space(6)
+
+      Rectangle {
+        id: flagBadge
+        visible: root.displayMode !== "text" && flagImg.status === Image.Ready
+        width: Style.space(19)
+        height: Style.space(13)
+        anchors.verticalCenter: parent.verticalCenter
+        radius: Style.space(2)
+        color: "transparent"
+        clip: true
+
+        Image {
+          id: flagImg
+          anchors.fill: parent
+          source: root.flagPathFor(root.activeCode)
+          sourceSize.width: 38
+          sourceSize.height: 26
+          fillMode: Image.PreserveAspectCrop
+          smooth: true
+        }
+
+        Rectangle {
+          anchors.fill: parent
+          radius: parent.radius
+          color: "transparent"
+          border.color: Qt.rgba(1, 1, 1, 0.18)
+          border.width: 1
+        }
+      }
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.verticalCenterOffset: 1
+        visible: root.displayMode !== "flag" || flagImg.status !== Image.Ready
+        text: root.barLabel
+        color: button.active && button.useActiveColor ? button.activeColor : button.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+        renderType: Text.NativeRendering
+      }
     }
   }
 
@@ -558,9 +605,39 @@ Panel {
                 }
               }
 
+              Rectangle {
+                id: rowFlagBadge
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
+                width: Style.space(20)
+                height: Style.space(14)
+                radius: Style.space(2)
+                color: "transparent"
+                clip: true
+
+                Image {
+                  id: rowFlagImg
+                  anchors.fill: parent
+                  source: root.flagPathFor(row.modelData.code)
+                  sourceSize.width: 40
+                  sourceSize.height: 28
+                  fillMode: Image.PreserveAspectCrop
+                  smooth: true
+                }
+
+                Rectangle {
+                  anchors.fill: parent
+                  radius: parent.radius
+                  color: "transparent"
+                  border.color: Qt.rgba(1, 1, 1, 0.15)
+                  border.width: 1
+                }
+              }
+
               Text {
                 id: rowAbbrev
-                anchors.left: parent.left
+                anchors.left: rowFlagBadge.right
                 anchors.leftMargin: Style.space(8)
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.abbrevFor(row.modelData.code)
@@ -661,6 +738,65 @@ Panel {
           }
         }
 
+        PanelSeparator {
+          foreground: root.foreground
+        }
+
+        Row {
+          width: column.width
+          spacing: Style.space(6)
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Display:"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Item { width: Style.space(2); height: 1 }
+
+          Repeater {
+            model: [
+              { id: "flag", label: "Flag" },
+              { id: "text", label: "Text" },
+              { id: "both", label: "Both" }
+            ]
+
+            delegate: CursorSurface {
+              id: modeChip
+              required property var modelData
+              readonly property bool isSelected: root.displayMode === modelData.id
+              width: (column.width - Style.space(80)) / 3
+              height: Style.space(26)
+              radius: Style.space(4)
+              color: isSelected ? Qt.rgba(1, 1, 1, 0.12) : "transparent"
+              border.color: isSelected ? Color.accent : Qt.rgba(1, 1, 1, 0.1)
+              border.width: 1
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  if (root.bar) {
+                    root.bar.run("omarchy bar set glafeara.languages displayMode " + modeChip.modelData.id)
+                  }
+                }
+              }
+
+              Text {
+                anchors.centerIn: parent
+                text: modeChip.modelData.label
+                color: modeChip.isSelected ? Color.accent : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: modeChip.isSelected
+              }
+            }
+          }
+        }
+
         Text {
           width: column.width
           visible: root.lastError !== ""
@@ -706,17 +842,51 @@ Panel {
       // Mirrors the theme's decoration:rounding, like the stock OSD card.
       radius: Style.cornerRadius
       borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
-      width: Math.max(osdLabel.implicitHeight, osdLabel.implicitWidth) + Style.space(48)
-      height: osdLabel.implicitHeight + Style.space(48)
+      width: Style.space(160)
+      height: Style.space(130)
 
-      Text {
-        id: osdLabel
+      Column {
         anchors.centerIn: parent
-        text: root.osdText
-        color: Color.popups.text
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.displayLarge * 2
-        font.bold: true
+        spacing: Style.space(10)
+
+        Rectangle {
+          id: osdFlagBadge
+          visible: osdFlagImg.status === Image.Ready && root.displayMode !== "text"
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: Style.space(80)
+          height: Style.space(54)
+          radius: Style.space(6)
+          color: "transparent"
+          clip: true
+
+          Image {
+            id: osdFlagImg
+            anchors.fill: parent
+            source: root.flagPathFor(root.osdText)
+            sourceSize.width: 160
+            sourceSize.height: 108
+            fillMode: Image.PreserveAspectCrop
+            smooth: true
+          }
+
+          Rectangle {
+            anchors.fill: parent
+            radius: parent.radius
+            color: "transparent"
+            border.color: Qt.rgba(1, 1, 1, 0.22)
+            border.width: 1
+          }
+        }
+
+        Text {
+          id: osdLabel
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.osdText
+          color: Color.popups.text
+          font.family: root.fontFamily
+          font.pixelSize: (osdFlagBadge.visible ? Style.font.titleLarge : Style.font.displayLarge * 2)
+          font.bold: true
+        }
       }
     }
   }
