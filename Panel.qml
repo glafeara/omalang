@@ -747,14 +747,13 @@ Panel {
           spacing: Style.space(6)
 
           Text {
+            width: Style.space(78)
             anchors.verticalCenter: parent.verticalCenter
             text: "Display:"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }
-
-          Item { width: Style.space(2); height: 1 }
 
           Repeater {
             model: [
@@ -767,7 +766,7 @@ Panel {
               id: modeChip
               required property var modelData
               readonly property bool isSelected: root.displayMode === modelData.id
-              width: (column.width - Style.space(80)) / 3
+              width: (column.width - Style.space(78) - Style.space(18)) / 3
               height: Style.space(26)
               radius: Style.space(4)
               color: isSelected ? Qt.rgba(1, 1, 1, 0.12) : "transparent"
@@ -802,6 +801,7 @@ Panel {
           spacing: Style.space(6)
 
           Text {
+            width: Style.space(78)
             anchors.verticalCenter: parent.verticalCenter
             text: "OSD Popup:"
             color: root.dim
@@ -809,37 +809,42 @@ Panel {
             font.pixelSize: Style.font.caption
           }
 
-          Item { width: Style.space(2); height: 1 }
+          Repeater {
+            model: [
+              { val: true, label: "Enabled" },
+              { val: false, label: "Disabled" }
+            ]
 
-          CursorSurface {
-            id: osdToggleBtn
-            readonly property bool isEnabled: root.setting("showOsd", true) === true
-            width: Style.space(86)
-            height: Style.space(26)
-            radius: Style.space(4)
-            color: isEnabled ? Qt.rgba(1, 1, 1, 0.12) : "transparent"
-            border.color: isEnabled ? Color.accent : Qt.rgba(1, 1, 1, 0.1)
-            border.width: 1
+            delegate: CursorSurface {
+              id: osdChip
+              required property var modelData
+              readonly property bool isSelected: (root.setting("showOsd", true) === true) === modelData.val
+              width: (column.width - Style.space(78) - Style.space(12)) / 2
+              height: Style.space(26)
+              radius: Style.space(4)
+              color: isSelected ? Qt.rgba(1, 1, 1, 0.12) : "transparent"
+              border.color: isSelected ? Color.accent : Qt.rgba(1, 1, 1, 0.1)
+              border.width: 1
 
-            MouseArea {
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: {
-                if (root.bar) {
-                  var nextVal = !osdToggleBtn.isEnabled
-                  root.bar.run("omarchy bar set glafeara.languages showOsd " + (nextVal ? "true" : "false"))
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  if (root.bar) {
+                    root.bar.run("omarchy bar set glafeara.languages showOsd " + (osdChip.modelData.val ? "true" : "false"))
+                  }
                 }
               }
-            }
 
-            Text {
-              anchors.centerIn: parent
-              text: osdToggleBtn.isEnabled ? "✓ Enabled" : "✕ Disabled"
-              color: osdToggleBtn.isEnabled ? Color.accent : root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: osdToggleBtn.isEnabled
+              Text {
+                anchors.centerIn: parent
+                text: osdChip.modelData.label
+                color: osdChip.isSelected ? Color.accent : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: osdChip.isSelected
+              }
             }
           }
         }
