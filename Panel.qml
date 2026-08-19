@@ -797,6 +797,53 @@ Panel {
           }
         }
 
+        Row {
+          width: column.width
+          spacing: Style.space(6)
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "OSD Popup:"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Item { width: Style.space(2); height: 1 }
+
+          CursorSurface {
+            id: osdToggleBtn
+            readonly property bool isEnabled: root.setting("showOsd", true) === true
+            width: Style.space(86)
+            height: Style.space(26)
+            radius: Style.space(4)
+            color: isEnabled ? Qt.rgba(1, 1, 1, 0.12) : "transparent"
+            border.color: isEnabled ? Color.accent : Qt.rgba(1, 1, 1, 0.1)
+            border.width: 1
+
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: {
+                if (root.bar) {
+                  var nextVal = !osdToggleBtn.isEnabled
+                  root.bar.run("omarchy bar set glafeara.languages showOsd " + (nextVal ? "true" : "false"))
+                }
+              }
+            }
+
+            Text {
+              anchors.centerIn: parent
+              text: osdToggleBtn.isEnabled ? "✓ Enabled" : "✕ Disabled"
+              color: osdToggleBtn.isEnabled ? Color.accent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: osdToggleBtn.isEnabled
+            }
+          }
+        }
+
         Text {
           width: column.width
           visible: root.lastError !== ""
@@ -835,6 +882,8 @@ Panel {
     // whatever the user is typing into.
     mask: Region {}
 
+    readonly property bool osdIsFlagOnly: root.displayMode === "flag" && osdFlagImg.status === Image.Ready
+
     BorderSurface {
       id: osdCard
       anchors.centerIn: parent
@@ -842,51 +891,47 @@ Panel {
       // Mirrors the theme's decoration:rounding, like the stock OSD card.
       radius: Style.cornerRadius
       borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
-      width: Style.space(160)
-      height: Style.space(130)
+      width: osdWindow.osdIsFlagOnly ? Style.space(136) : (Math.max(osdLabel.implicitHeight, osdLabel.implicitWidth) + Style.space(48))
+      height: osdWindow.osdIsFlagOnly ? Style.space(96) : (osdLabel.implicitHeight + Style.space(48))
 
-      Column {
+      Rectangle {
+        id: osdFlagBadge
+        visible: osdWindow.osdIsFlagOnly
         anchors.centerIn: parent
-        spacing: Style.space(10)
+        width: Style.space(96)
+        height: Style.space(64)
+        radius: Style.space(6)
+        color: "transparent"
+        clip: true
+
+        Image {
+          id: osdFlagImg
+          anchors.fill: parent
+          source: root.flagPathFor(root.osdText)
+          sourceSize.width: 192
+          sourceSize.height: 128
+          fillMode: Image.PreserveAspectCrop
+          smooth: true
+        }
 
         Rectangle {
-          id: osdFlagBadge
-          visible: osdFlagImg.status === Image.Ready && root.displayMode !== "text"
-          anchors.horizontalCenter: parent.horizontalCenter
-          width: Style.space(80)
-          height: Style.space(54)
-          radius: Style.space(6)
+          anchors.fill: parent
+          radius: parent.radius
           color: "transparent"
-          clip: true
-
-          Image {
-            id: osdFlagImg
-            anchors.fill: parent
-            source: root.flagPathFor(root.osdText)
-            sourceSize.width: 160
-            sourceSize.height: 108
-            fillMode: Image.PreserveAspectCrop
-            smooth: true
-          }
-
-          Rectangle {
-            anchors.fill: parent
-            radius: parent.radius
-            color: "transparent"
-            border.color: Qt.rgba(1, 1, 1, 0.22)
-            border.width: 1
-          }
+          border.color: Qt.rgba(1, 1, 1, 0.22)
+          border.width: 1
         }
+      }
 
-        Text {
-          id: osdLabel
-          anchors.horizontalCenter: parent.horizontalCenter
-          text: root.osdText
-          color: Color.popups.text
-          font.family: root.fontFamily
-          font.pixelSize: (osdFlagBadge.visible ? Style.font.titleLarge : Style.font.displayLarge * 2)
-          font.bold: true
-        }
+      Text {
+        id: osdLabel
+        visible: !osdWindow.osdIsFlagOnly
+        anchors.centerIn: parent
+        text: root.osdText
+        color: Color.popups.text
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.displayLarge * 2
+        font.bold: true
       }
     }
   }
