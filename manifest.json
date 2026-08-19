@@ -19,10 +19,17 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
+      "displayMode": "flag",
       "osdDurationMs": 750,
       "showOsd": true
     },
     "schema": [
+      {
+        "key": "displayMode",
+        "type": "string",
+        "label": "Display mode (flag, text, both)",
+        "defaultValue": "flag"
+      },
       {
         "key": "osdDurationMs",
         "type": "integer",

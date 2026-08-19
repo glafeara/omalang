@@ -76,6 +76,44 @@ Panel {
     return -1
   }
 
+  function isOsdEnabled() {
+    var v = setting("showOsd", true)
+    return v === true || v === "true" || v === 1 || v === "1"
+  }
+
+  property string currentDisplayMode: String(setting("displayMode", "flag"))
+  property bool currentShowOsd: isOsdEnabled()
+
+  onSettingsChanged: {
+    currentDisplayMode = String(setting("displayMode", "flag"))
+    currentShowOsd = isOsdEnabled()
+  }
+
+  function updateDisplayMode(mode) {
+    currentDisplayMode = String(mode)
+    if (root.bar) root.bar.run("omarchy bar set glafeara.languages displayMode " + mode)
+  }
+
+  function updateShowOsd(enabled) {
+    var boolVal = (enabled === true || enabled === "true" || enabled === 1 || enabled === "1")
+    currentShowOsd = boolVal
+    if (root.bar) root.bar.run("omarchy bar set glafeara.languages showOsd " + (boolVal ? "true" : "false") + " --json")
+  }
+
+  readonly property string activeCode: {
+    if (activeIndex >= 0) return String(layouts[activeIndex].code).toLowerCase()
+    var key = codesByName[String(activeKeymap)]
+    if (key) return String(key).replace(/\(.*$/, "").toLowerCase()
+    return fallbackAbbrev(activeKeymap).toLowerCase()
+  }
+
+  function flagPathFor(code) {
+    if (!code) return ""
+    var c = String(code).toLowerCase().trim().replace(/[^a-z0-9_]/g, "")
+    if (c === "en") c = "us"
+    return Qt.resolvedUrl("flags/" + c + ".svg")
+  }
+
   readonly property string barLabel: activeIndex >= 0
     ? abbrevFor(layouts[activeIndex].code)
     : (activeKeymap !== "" ? fallbackAbbrev(activeKeymap) : "")
@@ -208,7 +246,7 @@ Panel {
 
   function showOsd(label) {
     if (!root.primaryInstance) return
-    if (setting("showOsd", true) !== true || label === "") return
+    if (!root.currentShowOsd || label === "") return
     root.osdText = label
     root.osdVisible = true
     osdTimer.restart()
@@ -439,30 +477,61 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.barLabel
+    text: root.currentDisplayMode === "flag" ? "     " : (root.currentDisplayMode === "both" ? "       " + root.barLabel : root.barLabel)
     fontSize: Style.font.body
-    horizontalMargin: 7
+    horizontalMargin: root.currentDisplayMode === "flag" ? 6 : 7
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.cycleLayout()
       else root.toggle()
     }
 
-    // The stock label is 10px regular — too faint to read at a glance next to
-    // the bar's 13px icons. Hide it (it still sizes the slot) and paint the
-    // abbreviation bold at body size instead.
     labelVisible: false
 
-    Text {
+    Row {
       anchors.centerIn: parent
-      // Box-centering puts cap-height ink a hair above the optical center the
-      // bar icons sit on; one pixel down lines the label up with them.
-      anchors.verticalCenterOffset: 1
-      text: root.barLabel
-      color: button.active && button.useActiveColor ? button.activeColor : button.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.body
-      font.bold: true
-      renderType: Text.NativeRendering
+      anchors.verticalCenterOffset: 0
+      spacing: Style.space(6)
+
+      Rectangle {
+        id: flagBadge
+        visible: root.currentDisplayMode !== "text" && flagImg.status === Image.Ready
+        width: Style.space(19)
+        height: Style.space(13)
+        anchors.verticalCenter: parent.verticalCenter
+        radius: Style.space(2)
+        color: "transparent"
+        clip: true
+
+        Image {
+          id: flagImg
+          anchors.fill: parent
+          source: root.flagPathFor(root.activeCode)
+          sourceSize.width: 38
+          sourceSize.height: 26
+          fillMode: Image.PreserveAspectCrop
+          smooth: true
+        }
+
+        Rectangle {
+          anchors.fill: parent
+          radius: parent.radius
+          color: "transparent"
+          border.color: Qt.rgba(1, 1, 1, 0.18)
+          border.width: 1
+        }
+      }
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.verticalCenterOffset: 1
+        visible: root.currentDisplayMode !== "flag" || flagImg.status !== Image.Ready
+        text: root.barLabel
+        color: button.active && button.useActiveColor ? button.activeColor : button.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+        renderType: Text.NativeRendering
+      }
     }
   }
 
@@ -558,9 +627,39 @@ Panel {
                 }
               }
 
+              Rectangle {
+                id: rowFlagBadge
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
+                width: Style.space(20)
+                height: Style.space(14)
+                radius: Style.space(2)
+                color: "transparent"
+                clip: true
+
+                Image {
+                  id: rowFlagImg
+                  anchors.fill: parent
+                  source: root.flagPathFor(row.modelData.code)
+                  sourceSize.width: 40
+                  sourceSize.height: 28
+                  fillMode: Image.PreserveAspectCrop
+                  smooth: true
+                }
+
+                Rectangle {
+                  anchors.fill: parent
+                  radius: parent.radius
+                  color: "transparent"
+                  border.color: Qt.rgba(1, 1, 1, 0.15)
+                  border.width: 1
+                }
+              }
+
               Text {
                 id: rowAbbrev
-                anchors.left: parent.left
+                anchors.left: rowFlagBadge.right
                 anchors.leftMargin: Style.space(8)
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.abbrevFor(row.modelData.code)
@@ -661,6 +760,109 @@ Panel {
           }
         }
 
+        PanelSeparator {
+          foreground: root.foreground
+        }
+
+        Row {
+          width: column.width
+          spacing: Style.space(6)
+
+          Text {
+            width: Style.space(78)
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Display:"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Repeater {
+            model: [
+              { id: "flag", label: "Flag" },
+              { id: "text", label: "Text" },
+              { id: "both", label: "Both" }
+            ]
+
+            delegate: CursorSurface {
+              id: modeChip
+              required property var modelData
+              readonly property bool isSelected: root.currentDisplayMode === modelData.id
+              width: (column.width - Style.space(78) - Style.space(18)) / 3
+              height: Style.space(26)
+              radius: Style.space(4)
+              color: isSelected ? Qt.rgba(1, 1, 1, 0.12) : "transparent"
+              border.color: isSelected ? Color.accent : Qt.rgba(1, 1, 1, 0.1)
+              border.width: 1
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.updateDisplayMode(modeChip.modelData.id)
+              }
+
+              Text {
+                anchors.centerIn: parent
+                text: modeChip.modelData.label
+                color: modeChip.isSelected ? Color.accent : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: modeChip.isSelected
+              }
+            }
+          }
+        }
+
+        Row {
+          width: column.width
+          spacing: Style.space(6)
+
+          Text {
+            width: Style.space(78)
+            anchors.verticalCenter: parent.verticalCenter
+            text: "OSD Popup:"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Repeater {
+            model: [
+              { val: true, label: "Enabled" },
+              { val: false, label: "Disabled" }
+            ]
+
+            delegate: CursorSurface {
+              id: osdChip
+              required property var modelData
+              readonly property bool isSelected: root.currentShowOsd === modelData.val
+              width: (column.width - Style.space(78) - Style.space(12)) / 2
+              height: Style.space(26)
+              radius: Style.space(4)
+              color: isSelected ? Qt.rgba(1, 1, 1, 0.12) : "transparent"
+              border.color: isSelected ? Color.accent : Qt.rgba(1, 1, 1, 0.1)
+              border.width: 1
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.updateShowOsd(osdChip.modelData.val)
+              }
+
+              Text {
+                anchors.centerIn: parent
+                text: osdChip.modelData.label
+                color: osdChip.isSelected ? Color.accent : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: osdChip.isSelected
+              }
+            }
+          }
+        }
+
         Text {
           width: column.width
           visible: root.lastError !== ""
@@ -699,6 +901,8 @@ Panel {
     // whatever the user is typing into.
     mask: Region {}
 
+    readonly property bool osdIsFlagOnly: root.currentDisplayMode === "flag" && osdFlagImg.status === Image.Ready
+
     BorderSurface {
       id: osdCard
       anchors.centerIn: parent
@@ -706,11 +910,41 @@ Panel {
       // Mirrors the theme's decoration:rounding, like the stock OSD card.
       radius: Style.cornerRadius
       borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
-      width: Math.max(osdLabel.implicitHeight, osdLabel.implicitWidth) + Style.space(48)
-      height: osdLabel.implicitHeight + Style.space(48)
+      width: osdWindow.osdIsFlagOnly ? Style.space(136) : (Math.max(osdLabel.implicitHeight, osdLabel.implicitWidth) + Style.space(48))
+      height: osdWindow.osdIsFlagOnly ? Style.space(96) : (osdLabel.implicitHeight + Style.space(48))
+
+      Rectangle {
+        id: osdFlagBadge
+        visible: osdWindow.osdIsFlagOnly
+        anchors.centerIn: parent
+        width: Style.space(96)
+        height: Style.space(64)
+        radius: Style.space(6)
+        color: "transparent"
+        clip: true
+
+        Image {
+          id: osdFlagImg
+          anchors.fill: parent
+          source: root.flagPathFor(root.osdText)
+          sourceSize.width: 192
+          sourceSize.height: 128
+          fillMode: Image.PreserveAspectCrop
+          smooth: true
+        }
+
+        Rectangle {
+          anchors.fill: parent
+          radius: parent.radius
+          color: "transparent"
+          border.color: Qt.rgba(1, 1, 1, 0.22)
+          border.width: 1
+        }
+      }
 
       Text {
         id: osdLabel
+        visible: !osdWindow.osdIsFlagOnly
         anchors.centerIn: parent
         text: root.osdText
         color: Color.popups.text

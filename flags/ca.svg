@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480">
+  <path fill="#ff0000" d="M0 0h160v480H0zM480 0h160v480H480z"/>
+  <path fill="#ffffff" d="M160 0h320v480H160z"/>
+  <path fill="#ff0000" d="M320 120l25 50 45-15-20 45 40 20-40 20 20 45-45-15-25 50-5-50h-10l-5 50-25-50-45 15 20-45-40-20 40-20-20-45 45 15z" transform="scale(0.8) translate(70, 40)"/>
+</svg>
