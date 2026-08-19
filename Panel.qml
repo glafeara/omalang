@@ -76,7 +76,23 @@ Panel {
     return -1
   }
 
-  readonly property string displayMode: String(root.setting("displayMode", "flag"))
+  property string currentDisplayMode: String(setting("displayMode", "flag"))
+  property bool currentShowOsd: setting("showOsd", true) === true
+
+  onSettingsChanged: {
+    currentDisplayMode = String(setting("displayMode", "flag"))
+    currentShowOsd = setting("showOsd", true) === true
+  }
+
+  function updateDisplayMode(mode) {
+    currentDisplayMode = String(mode)
+    if (root.bar) root.bar.run("omarchy bar set glafeara.languages displayMode " + mode)
+  }
+
+  function updateShowOsd(enabled) {
+    currentShowOsd = (enabled === true || enabled === "true")
+    if (root.bar) root.bar.run("omarchy bar set glafeara.languages showOsd " + (currentShowOsd ? "true" : "false"))
+  }
 
   readonly property string activeCode: {
     if (activeIndex >= 0) return String(layouts[activeIndex].code).toLowerCase()
@@ -224,7 +240,7 @@ Panel {
 
   function showOsd(label) {
     if (!root.primaryInstance) return
-    if (setting("showOsd", true) !== true || label === "") return
+    if (!root.currentShowOsd || label === "") return
     root.osdText = label
     root.osdVisible = true
     osdTimer.restart()
@@ -455,9 +471,9 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.displayMode === "flag" ? "     " : (root.displayMode === "both" ? "       " + root.barLabel : root.barLabel)
+    text: root.currentDisplayMode === "flag" ? "     " : (root.currentDisplayMode === "both" ? "       " + root.barLabel : root.barLabel)
     fontSize: Style.font.body
-    horizontalMargin: root.displayMode === "flag" ? 6 : 7
+    horizontalMargin: root.currentDisplayMode === "flag" ? 6 : 7
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.cycleLayout()
       else root.toggle()
@@ -472,7 +488,7 @@ Panel {
 
       Rectangle {
         id: flagBadge
-        visible: root.displayMode !== "text" && flagImg.status === Image.Ready
+        visible: root.currentDisplayMode !== "text" && flagImg.status === Image.Ready
         width: Style.space(19)
         height: Style.space(13)
         anchors.verticalCenter: parent.verticalCenter
@@ -502,7 +518,7 @@ Panel {
       Text {
         anchors.verticalCenter: parent.verticalCenter
         anchors.verticalCenterOffset: 1
-        visible: root.displayMode !== "flag" || flagImg.status !== Image.Ready
+        visible: root.currentDisplayMode !== "flag" || flagImg.status !== Image.Ready
         text: root.barLabel
         color: button.active && button.useActiveColor ? button.activeColor : button.foreground
         font.family: root.fontFamily
@@ -765,7 +781,7 @@ Panel {
             delegate: CursorSurface {
               id: modeChip
               required property var modelData
-              readonly property bool isSelected: root.displayMode === modelData.id
+              readonly property bool isSelected: root.currentDisplayMode === modelData.id
               width: (column.width - Style.space(78) - Style.space(18)) / 3
               height: Style.space(26)
               radius: Style.space(4)
@@ -777,11 +793,7 @@ Panel {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  if (root.bar) {
-                    root.bar.run("omarchy bar set glafeara.languages displayMode " + modeChip.modelData.id)
-                  }
-                }
+                onClicked: root.updateDisplayMode(modeChip.modelData.id)
               }
 
               Text {
@@ -818,7 +830,7 @@ Panel {
             delegate: CursorSurface {
               id: osdChip
               required property var modelData
-              readonly property bool isSelected: (root.setting("showOsd", true) === true) === modelData.val
+              readonly property bool isSelected: root.currentShowOsd === modelData.val
               width: (column.width - Style.space(78) - Style.space(12)) / 2
               height: Style.space(26)
               radius: Style.space(4)
@@ -830,11 +842,7 @@ Panel {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  if (root.bar) {
-                    root.bar.run("omarchy bar set glafeara.languages showOsd " + (osdChip.modelData.val ? "true" : "false"))
-                  }
-                }
+                onClicked: root.updateShowOsd(osdChip.modelData.val)
               }
 
               Text {
@@ -887,7 +895,7 @@ Panel {
     // whatever the user is typing into.
     mask: Region {}
 
-    readonly property bool osdIsFlagOnly: root.displayMode === "flag" && osdFlagImg.status === Image.Ready
+    readonly property bool osdIsFlagOnly: root.currentDisplayMode === "flag" && osdFlagImg.status === Image.Ready
 
     BorderSurface {
       id: osdCard
